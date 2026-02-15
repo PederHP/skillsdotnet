@@ -1,3 +1,4 @@
+using SkillsDotNet;
 using SkillsDotNet.Mcp;
 
 namespace SkillsDotNet.Mcp.Tests;

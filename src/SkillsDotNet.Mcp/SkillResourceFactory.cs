@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
+using SkillsDotNet;
 
 namespace SkillsDotNet.Mcp;
 

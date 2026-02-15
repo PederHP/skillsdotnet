@@ -12,6 +12,12 @@ dotnet add package SkillsDotNet.Mcp
 
 Requires the official [C# MCP SDK](https://github.com/modelcontextprotocol/csharp-sdk) (`ModelContextProtocol` package).
 
+If you only need the core skill types (parsing, validation, scanning) without the MCP transport layer:
+
+```
+dotnet add package SkillsDotNet
+```
+
 ## Server-Side Usage
 
 ### Register a single skill directory
@@ -164,6 +170,13 @@ Per the [agentskills.io spec](https://agentskills.io):
 - No leading, trailing, or consecutive hyphens
 - NFKC normalized, max 64 characters
 - Must match the directory name
+
+## Packages
+
+| Package | Description |
+|---------|-------------|
+| `SkillsDotNet` | Core library: `FrontmatterParser`, `SkillValidator`, `SkillDirectoryScanner`, `SkillInfo`, `SkillFileInfo`. No external dependencies. |
+| `SkillsDotNet.Mcp` | MCP transport layer: `SkillResourceFactory`, builder extensions, client extensions. Depends on `SkillsDotNet` and `ModelContextProtocol`. |
 
 ## Target Frameworks
 

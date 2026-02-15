@@ -1,4 +1,4 @@
-namespace SkillsDotNet.Mcp;
+namespace SkillsDotNet;
 
 /// <summary>
 /// Represents a single file within a skill directory.

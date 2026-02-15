@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace SkillsDotNet.Mcp;
+namespace SkillsDotNet;
 
 /// <summary>
 /// Simple YAML frontmatter parser (no external YAML dependency).

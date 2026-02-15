@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text;
 
-namespace SkillsDotNet.Mcp;
+namespace SkillsDotNet;
 
 /// <summary>
 /// Validates skill properties according to the agentskills.io specification.

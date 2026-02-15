@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 
-namespace SkillsDotNet.Mcp;
+namespace SkillsDotNet;
 
 /// <summary>
 /// Scans directories for skills, parsing SKILL.md files and computing file hashes.

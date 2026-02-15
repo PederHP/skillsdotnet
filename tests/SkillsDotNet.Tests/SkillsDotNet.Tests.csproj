@@ -14,7 +14,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\SkillsDotNet.Mcp\SkillsDotNet.Mcp.csproj" />
+    <ProjectReference Include="..\..\src\SkillsDotNet\SkillsDotNet.csproj" />
   </ItemGroup>
 
   <ItemGroup>

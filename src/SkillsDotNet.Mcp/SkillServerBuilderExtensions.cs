@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using SkillsDotNet;
 using SkillsDotNet.Mcp;
 
 namespace Microsoft.Extensions.DependencyInjection;

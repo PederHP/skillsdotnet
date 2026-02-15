@@ -12,6 +12,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\SkillsDotNet\SkillsDotNet.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="SkillsDotNet.Mcp.Tests" />
   </ItemGroup>
 

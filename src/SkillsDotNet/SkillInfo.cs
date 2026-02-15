@@ -1,4 +1,4 @@
-namespace SkillsDotNet.Mcp;
+namespace SkillsDotNet;
 
 /// <summary>
 /// Parsed skill metadata produced by scanning a skill directory.

@@ -1,6 +1,6 @@
-using SkillsDotNet.Mcp;
+using SkillsDotNet;
 
-namespace SkillsDotNet.Mcp.Tests;
+namespace SkillsDotNet.Tests;
 
 public class FrontmatterParserTests
 {
