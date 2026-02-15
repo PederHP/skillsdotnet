@@ -1,5 +1,8 @@
 # SkillsDotNet
 
+[![NuGet](https://img.shields.io/nuget/v/SkillsDotNet.svg)](https://www.nuget.org/packages/SkillsDotNet)
+[![NuGet](https://img.shields.io/nuget/v/SkillsDotNet.Mcp.svg)](https://www.nuget.org/packages/SkillsDotNet.Mcp)
+
 Agent skills ([agentskills.io](https://agentskills.io)) for the C# MCP SDK.
 
 Skills provide "context-as-progressive-disclosure" via `SKILL.md` files. This library uses a `skill://` URI convention to distribute skills as MCP resources -- clients can load frontmatter for discovery (~50-100 tokens), full SKILL.md on demand, and supporting files as needed.

@@ -5,7 +5,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>SkillsDotNet.Mcp</RootNamespace>
+    <Description>MCP transport layer for agentskills.io skills. Exposes skills as MCP resources with skill:// URIs, and provides SkillCatalog for client-side discovery and IChatClient integration.</Description>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="ModelContextProtocol" Version="0.8.0-preview.1" />
