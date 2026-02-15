@@ -34,6 +34,8 @@ public static class SkillServerBuilderExtensions
             builder.Services.AddSingleton(resource);
         }
 
+        SkillCompletionExtensions.GetOrCreateRegistry(builder).RegisterSkill(skill);
+
         return builder;
     }
 
@@ -62,6 +64,8 @@ public static class SkillServerBuilderExtensions
             {
                 builder.Services.AddSingleton(resource);
             }
+
+            SkillCompletionExtensions.GetOrCreateRegistry(builder).RegisterSkill(skill);
         }
 
         return builder;
@@ -101,6 +105,8 @@ public static class SkillServerBuilderExtensions
                 {
                     builder.Services.AddSingleton(resource);
                 }
+
+                SkillCompletionExtensions.GetOrCreateRegistry(builder).RegisterSkill(skill);
             }
         }
 

@@ -5,6 +5,8 @@
 
 Agent skills ([agentskills.io](https://agentskills.io)) for the C# MCP SDK.
 
+> **Experimental:** This package is under active development and its API is subject to change.
+
 Skills provide "context-as-progressive-disclosure" via `SKILL.md` files. This library uses a `skill://` URI convention to distribute skills as MCP resources -- clients can load frontmatter for discovery (~50-100 tokens), full SKILL.md on demand, and supporting files as needed.
 
 ## Installation
@@ -225,6 +227,10 @@ Per the [agentskills.io spec](https://agentskills.io):
 - .NET 10
 - .NET 9
 - .NET 8
+
+## Acknowledgements
+
+Many conventions and especially the server-side resource implementations in this library are inspired by [FastMCP 3.0](https://github.com/jlowin/fastmcp). We've tried to align with FastMCP whenever possible.
 
 ## License
 

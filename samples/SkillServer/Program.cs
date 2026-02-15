@@ -9,7 +9,8 @@ var skillsPath = Path.Combine(AppContext.BaseDirectory, "skills");
 builder.Services
     .AddMcpServer()
     .WithStdioServerTransport()
-    .WithSkillsDirectory(skillsPath);
+    .WithSkillsDirectory(skillsPath)
+    .WithSkillCompletions();
 
 builder.Logging.AddConsole(options =>
 {
