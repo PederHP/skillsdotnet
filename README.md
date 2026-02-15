@@ -103,6 +103,45 @@ var path = await client.DownloadSkillAsync("code-review", targetDirectory: "./sk
 var paths = await client.SyncSkillsAsync(targetDirectory: "./skills");
 ```
 
+### Using skills with `IChatClient`
+
+`SkillCatalog` discovers skills from one or more MCP servers and provides two things for use with [`Microsoft.Extensions.AI`](https://learn.microsoft.com/en-us/dotnet/ai/microsoft-extensions-ai): context blocks (frontmatter summaries for the system prompt) and a `load_skill` tool the model can call to load a skill's full content on demand.
+
+```csharp
+// Build a catalog from one or more MCP servers
+var catalog = new SkillCatalog();
+await catalog.AddClientAsync(mcpClient1);
+await catalog.AddClientAsync(mcpClient2);
+
+// Get frontmatter context blocks — add to the system message so the
+// model knows what skills are available (~50-100 tokens each)
+var contexts = catalog.GetSkillContexts(); // IReadOnlyList<TextContent>
+
+var messages = new List<ChatMessage>
+{
+    new(ChatRole.System, [
+        new TextContent("You are a helpful assistant. The following skills are available:"),
+        .. contexts
+    ]),
+    new(ChatRole.User, "Help me review this pull request"),
+};
+
+// Get the load_skill tool — add to ChatOptions.Tools so the model
+// can load a skill's full SKILL.md content when it decides to use one
+var options = new ChatOptions
+{
+    Tools = [catalog.LoadSkillTool],
+};
+
+var response = await chatClient.GetResponseAsync(messages, options);
+```
+
+If a server disconnects, remove its skills from the catalog:
+
+```csharp
+catalog.RemoveClient(mcpClient1);
+```
+
 ## URI Convention
 
 Each skill exposes three resources following the [FastMCP](https://github.com/jlowin/fastmcp) convention:
@@ -175,8 +214,8 @@ Per the [agentskills.io spec](https://agentskills.io):
 
 | Package | Description |
 |---------|-------------|
-| `SkillsDotNet` | Core library: `FrontmatterParser`, `SkillValidator`, `SkillDirectoryScanner`, `SkillInfo`, `SkillFileInfo`. No external dependencies. |
-| `SkillsDotNet.Mcp` | MCP transport layer: `SkillResourceFactory`, builder extensions, client extensions. Depends on `SkillsDotNet` and `ModelContextProtocol`. |
+| `SkillsDotNet` | Core library: `FrontmatterParser`, `SkillValidator`, `SkillDirectoryScanner`, `SkillInfo`, `SkillFileInfo`, `SkillContextExtensions`. Depends on `Microsoft.Extensions.AI.Abstractions`. |
+| `SkillsDotNet.Mcp` | MCP transport layer: `SkillResourceFactory`, `SkillCatalog`, builder extensions, client extensions. Depends on `SkillsDotNet` and `ModelContextProtocol`. |
 
 ## Target Frameworks
 
