@@ -57,4 +57,22 @@ public class SkillCatalogTests
         await Assert.ThrowsAsync<KeyNotFoundException>(
             () => catalog.LoadSkillAsync("nonexistent"));
     }
+
+    [Fact]
+    public void OnDependenciesRequired_DefaultsToNull()
+    {
+        var catalog = new SkillCatalog();
+
+        Assert.Null(catalog.OnDependenciesRequired);
+    }
+
+    [Fact]
+    public void OnDependenciesRequired_CanBeSet()
+    {
+        var catalog = new SkillCatalog();
+
+        catalog.OnDependenciesRequired = (request, ct) => Task.FromResult(true);
+
+        Assert.NotNull(catalog.OnDependenciesRequired);
+    }
 }

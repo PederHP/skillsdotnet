@@ -101,9 +101,10 @@ public class SkillDirectoryScannerTests
     {
         var skills = SkillDirectoryScanner.ScanDirectory(TestSkillsDir);
 
-        Assert.Equal(2, skills.Count);
+        Assert.Equal(3, skills.Count);
         Assert.Contains(skills, s => s.Name == "code-review");
         Assert.Contains(skills, s => s.Name == "simple-skill");
+        Assert.Contains(skills, s => s.Name == "skill-with-deps");
     }
 
     [Fact]

@@ -196,4 +196,49 @@ public class SkillValidatorTests
 
         Assert.Contains(errors, e => e.Contains("must not be empty"));
     }
+
+    [Fact]
+    public void Validate_WithDependencies_ReturnsNoErrors()
+    {
+        var frontmatter = new Dictionary<string, object>
+        {
+            ["name"] = "my-skill",
+            ["description"] = "A skill",
+            ["dependencies"] = new List<string> { "server-a", "server-b" },
+        };
+
+        var errors = SkillValidator.Validate(frontmatter);
+
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public void Validate_DependenciesNotList_ReturnsError()
+    {
+        var frontmatter = new Dictionary<string, object>
+        {
+            ["name"] = "my-skill",
+            ["description"] = "A skill",
+            ["dependencies"] = "single-server",
+        };
+
+        var errors = SkillValidator.Validate(frontmatter);
+
+        Assert.Contains(errors, e => e.Contains("must be an inline list"));
+    }
+
+    [Fact]
+    public void Validate_DependenciesWithEmptyEntry_ReturnsError()
+    {
+        var frontmatter = new Dictionary<string, object>
+        {
+            ["name"] = "my-skill",
+            ["description"] = "A skill",
+            ["dependencies"] = new List<string> { "server-a", "" },
+        };
+
+        var errors = SkillValidator.Validate(frontmatter);
+
+        Assert.Contains(errors, e => e.Contains("must not contain empty entries"));
+    }
 }

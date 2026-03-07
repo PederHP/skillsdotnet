@@ -138,4 +138,33 @@ public class SkillContextExtensionsTests
         SkillInfo skill = null!;
         Assert.Throws<ArgumentNullException>(() => skill.AsTextContent());
     }
+
+    [Fact]
+    public void DefaultFormatter_WithDependencies_IncludesRequires()
+    {
+        var frontmatter = new Dictionary<string, object>
+        {
+            ["name"] = "my-skill",
+            ["description"] = "A helpful skill",
+            ["dependencies"] = new List<string> { "server-a", "server-b" },
+        };
+
+        var result = SkillContextExtensions.DefaultFormatter(frontmatter);
+
+        Assert.Equal("my-skill: A helpful skill (requires: server-a, server-b)", result);
+    }
+
+    [Fact]
+    public void DefaultFormatter_WithoutDependencies_NoRequires()
+    {
+        var frontmatter = new Dictionary<string, object>
+        {
+            ["name"] = "my-skill",
+            ["description"] = "A helpful skill",
+        };
+
+        var result = SkillContextExtensions.DefaultFormatter(frontmatter);
+
+        Assert.DoesNotContain("requires", result);
+    }
 }

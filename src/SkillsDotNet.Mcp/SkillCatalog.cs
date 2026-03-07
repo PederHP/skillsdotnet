@@ -70,6 +70,7 @@ public sealed class SkillCatalog
                 ResourceUri = skill.Uri,
                 Frontmatter = frontmatter,
                 Context = context,
+                Dependencies = frontmatter.GetDependencies(),
             };
         }
 
@@ -120,6 +121,15 @@ public sealed class SkillCatalog
     }
 
     /// <summary>
+    /// Optional callback invoked when a skill with MCP server dependencies is loaded.
+    /// The callback receives a <see cref="SkillDependencyRequest"/> describing the required servers.
+    /// Return <c>true</c> if all servers are connected, <c>false</c> if any could not be connected.
+    /// When <c>false</c> is returned, <see cref="LoadSkillAsync"/> throws <see cref="InvalidOperationException"/>.
+    /// If not set, skills with dependencies load silently without notification.
+    /// </summary>
+    public Func<SkillDependencyRequest, CancellationToken, Task<bool>>? OnDependenciesRequired { get; set; }
+
+    /// <summary>
     /// An <see cref="AIFunction"/> that loads a skill's full SKILL.md content by name.
     /// Suitable for use in <c>ChatOptions.Tools</c>.
     /// Rebuilt automatically when clients are added or removed.
@@ -136,6 +146,23 @@ public sealed class SkillCatalog
         ArgumentNullException.ThrowIfNull(skillName);
 
         var cached = _cache[skillName];
+
+        if (cached.Dependencies.Count > 0 && OnDependenciesRequired is not null)
+        {
+            var request = new SkillDependencyRequest
+            {
+                SkillName = skillName,
+                ServerNames = cached.Dependencies,
+            };
+
+            var connected = await OnDependenciesRequired(request, cancellationToken);
+            if (!connected)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot load skill '{skillName}': required MCP server dependencies could not be satisfied.");
+            }
+        }
+
         var result = await cached.Client.ReadResourceAsync(
             cached.ResourceUri, cancellationToken: cancellationToken);
 
@@ -168,5 +195,6 @@ public sealed class SkillCatalog
         public required string ResourceUri { get; init; }
         public required IReadOnlyDictionary<string, object> Frontmatter { get; init; }
         public required TextContent Context { get; init; }
+        public required IReadOnlyList<string> Dependencies { get; init; }
     }
 }

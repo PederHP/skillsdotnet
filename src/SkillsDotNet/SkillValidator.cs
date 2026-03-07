@@ -19,7 +19,7 @@ public static class SkillValidator
 
     private static readonly HashSet<string> AllowedFields = new(StringComparer.Ordinal)
     {
-        "name", "description", "license", "allowed-tools", "metadata", "compatibility"
+        "name", "description", "license", "allowed-tools", "metadata", "compatibility", "dependencies"
     };
 
     /// <summary>
@@ -63,6 +63,26 @@ public static class SkillValidator
         else
         {
             errors.Add("Field 'description' is required and must be a string.");
+        }
+
+        // Validate dependencies (optional)
+        if (frontmatter.TryGetValue("dependencies", out var depsObj))
+        {
+            if (depsObj is not List<string> depsList)
+            {
+                errors.Add("Field 'dependencies' must be an inline list (e.g. [server-a, server-b]).");
+            }
+            else
+            {
+                foreach (var dep in depsList)
+                {
+                    if (string.IsNullOrWhiteSpace(dep))
+                    {
+                        errors.Add("Field 'dependencies' must not contain empty entries.");
+                        break;
+                    }
+                }
+            }
         }
 
         // Validate compatibility (optional)
