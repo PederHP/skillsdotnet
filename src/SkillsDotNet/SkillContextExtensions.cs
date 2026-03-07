@@ -15,6 +15,11 @@ public static class SkillContextExtensions
         {
             var name = frontmatter.TryGetValue("name", out var n) ? n?.ToString() ?? "" : "";
             var description = frontmatter.TryGetValue("description", out var d) ? d?.ToString() ?? "" : "";
+            var deps = frontmatter.GetDependencies();
+            if (deps.Count > 0)
+            {
+                return $"{name}: {description} (requires: {string.Join(", ", deps)})";
+            }
             return $"{name}: {description}";
         };
 
