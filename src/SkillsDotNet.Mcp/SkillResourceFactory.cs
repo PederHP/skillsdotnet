@@ -152,7 +152,7 @@ public static class SkillResourceFactory
         {
             Uri = uri,
             MimeType = mimeType,
-            Blob = Convert.ToBase64String(bytes)
+            Blob = bytes
         };
     }
 
@@ -174,7 +174,7 @@ public static class SkillResourceFactory
         {
             Uri = $"skill://resource/{Path.GetFileName(filePath)}",
             MimeType = mimeType,
-            Blob = Convert.ToBase64String(bytes)
+            Blob = bytes
         };
     }
 

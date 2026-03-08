@@ -147,6 +147,41 @@ If a server disconnects, remove its skills from the catalog:
 catalog.RemoveClient(mcpClient1);
 ```
 
+### Handling skill dependencies
+
+Skills can declare MCP server dependencies in their frontmatter:
+
+```markdown
+---
+name: explore-everything
+description: Explores an MCP server
+dependencies: [everything-server]
+---
+```
+
+When a skill with dependencies is loaded via the `load_skill` tool, the `OnDependenciesRequired` callback fires so the client host can connect to the required servers on demand:
+
+```csharp
+catalog.OnDependenciesRequired = async (request, cancellationToken) =>
+{
+    Console.WriteLine($"Skill '{request.SkillName}' requires: {string.Join(", ", request.ServerNames)}");
+
+    foreach (var serverName in request.ServerNames)
+    {
+        // Look up and connect to the server using your own configuration
+        var client = await ConnectToServerAsync(serverName, cancellationToken);
+        if (client is null)
+            return false; // Signal failure — LoadSkillAsync will throw
+    }
+
+    return true; // All dependencies satisfied
+};
+```
+
+The callback receives a `SkillDependencyRequest` with the skill name and the list of required server names. Return `true` when all servers are connected, or `false` to abort (which causes `LoadSkillAsync` to throw `InvalidOperationException`). If the callback is not set, skills with dependencies load silently without notification.
+
+See the [DynamicMcpServers sample](samples/DynamicMcpServers/) for a complete example.
+
 ## URI Convention
 
 Each skill exposes three resources following the [FastMCP](https://github.com/jlowin/fastmcp) convention:
@@ -204,6 +239,7 @@ Instructions for the agent go here.
 | `description` | Yes | 1-1024 chars |
 | `license` | No | License identifier |
 | `compatibility` | No | Comma-separated list of compatible agents (max 500 chars) |
+| `dependencies` | No | List of required MCP server names (connected on demand via `OnDependenciesRequired`) |
 | `allowed-tools` | No | Experimental tool restrictions |
 | `metadata` | No | Arbitrary key-value pairs for client-specific data |
 
