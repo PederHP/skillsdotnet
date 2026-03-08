@@ -124,8 +124,7 @@ public static class SkillClientExtensions
             }
             else if (content is BlobResourceContents blob)
             {
-                var bytes = Convert.FromBase64String(blob.Blob);
-                await File.WriteAllBytesAsync(localPath, bytes, cancellationToken);
+                await File.WriteAllBytesAsync(localPath, blob.Blob.ToArray(), cancellationToken);
             }
         }
 
