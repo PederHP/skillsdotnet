@@ -131,11 +131,11 @@ var messages = new List<ChatMessage>
     new(ChatRole.User, "Help me review this pull request"),
 };
 
-// Get the load_skill tool — add to ChatOptions.Tools so the model
-// can load a skill's full SKILL.md content when it decides to use one
+// Add catalog.Tools to ChatOptions.Tools — this is load_skill plus, once any skill
+// has been loaded, unload_skill (so the model can free context when finished).
 var options = new ChatOptions
 {
-    Tools = [catalog.LoadSkillTool],
+    Tools = [.. catalog.Tools],
 };
 
 var response = await chatClient.GetResponseAsync(messages, options);
@@ -181,6 +181,24 @@ catalog.OnDependenciesRequired = async (request, cancellationToken) =>
 The callback receives a `SkillDependencyRequest` with the skill name and the list of required server names. Return `true` when all servers are connected, or `false` to abort (which causes `LoadSkillAsync` to throw `InvalidOperationException`). If the callback is not set, skills with dependencies load silently without notification.
 
 See the [DynamicMcpServers sample](samples/DynamicMcpServers/) for a complete example.
+
+### Unloading skills
+
+Progressive disclosure shouldn't become progressive accumulation. Once at least one skill is loaded, `SkillCatalog.UnloadSkillTool` becomes available alongside `load_skill` — the model is told about it via a short postscript appended to each `load_skill` response, and can call it to free a skill's context when finished:
+
+```csharp
+catalog.OnDependenciesReleased = async (release, cancellationToken) =>
+{
+    // Only fires for servers that are no longer required by any *other* still-loaded
+    // skill — the catalog handles ref-counting, so it's safe to disconnect blindly.
+    foreach (var serverName in release.ServerNames)
+    {
+        await DisconnectAsync(serverName, cancellationToken);
+    }
+};
+```
+
+`UnloadSkillAsync` returns a `SkillUnloadResult` with the captured tool-call IDs from the original `load_skill` invocations (when the host uses `Microsoft.Extensions.AI.FunctionInvokingChatClient`), so hosts that want to scrub the chat history can drop the matching tool results. The `unload_skill` AIFunction and its accompanying guidance are only surfaced when at least one skill is currently loaded.
 
 ## URI Convention
 

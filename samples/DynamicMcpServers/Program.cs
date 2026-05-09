@@ -50,6 +50,21 @@ var catalog = await SkillCatalog.CreateAsync(skillClient);
 // We need to create this so it will be in scope for the callback
 var options = new ChatOptions { };
 
+// Rebuilds options.Tools from the current catalog + connected-servers state.
+// Called at every turn AND inside the dependency callbacks, so newly-connected
+// server tools become visible to the model on the very next round-trip within
+// the same turn (FunctionInvokingChatClient re-reads options.Tools each iteration).
+async Task RefreshToolsAsync()
+{
+    var tools = new List<AITool>(catalog.Tools);
+    foreach (var (_, client) in connectedServers)
+    {
+        var mcpTools = await client.ListToolsAsync();
+        tools.AddRange(mcpTools);
+    }
+    options.Tools = tools;
+}
+
 // This is the key part: when a skill is loaded that declares dependencies,
 // the callback fires and the client host connects to the required MCP servers.
 catalog.OnDependenciesRequired = async (request, cancellationToken) =>
@@ -74,18 +89,8 @@ catalog.OnDependenciesRequired = async (request, cancellationToken) =>
         try
         {
             var client = await factory();
-            connectedServers[serverName] = client;            
+            connectedServers[serverName] = client;
             Console.WriteLine($"[host] Connected to '{serverName}'.");
-
-            // Build the tool list dynamically — include the load_skill tool plus any
-            // tools from dynamically connected MCP servers.
-            var tools = new List<AITool> { catalog.LoadSkillTool };
-            foreach (var (_, dynamicClient) in connectedServers)
-            {
-                var mcpTools = await dynamicClient.ListToolsAsync();
-                tools.AddRange(mcpTools);
-            }
-            options.Tools = tools;
         }
         catch (Exception ex)
         {
@@ -94,7 +99,41 @@ catalog.OnDependenciesRequired = async (request, cancellationToken) =>
         }
     }
 
+    // Make the newly-connected server's tools visible to the model in the next
+    // round-trip of this same turn — without this, the model sees load_skill
+    // succeed but the server's tools are still missing until the next user turn.
+    await RefreshToolsAsync();
+
     return true;
+};
+
+// Symmetric to OnDependenciesRequired: the catalog computes which servers are no
+// longer needed by *any* still-loaded skill, and we only need to tear those down.
+catalog.OnDependenciesReleased = async (release, cancellationToken) =>
+{
+    Console.WriteLine($"\n[host] Skill '{release.SkillName}' unloaded; releasing MCP servers: {string.Join(", ", release.ServerNames)}");
+
+    foreach (var serverName in release.ServerNames)
+    {
+        if (!connectedServers.TryRemove(serverName, out var client))
+        {
+            continue;
+        }
+
+        Console.WriteLine($"[host] Disconnecting from '{serverName}'...");
+        try
+        {
+            await client.DisposeAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[host] Error disconnecting from '{serverName}': {ex.Message}");
+        }
+    }
+
+    // Drop the disconnected servers' tools from options.Tools immediately, so
+    // the model can't keep calling them after the unload in the same turn.
+    await RefreshToolsAsync();
 };
 
 Console.WriteLine($"Discovered {catalog.SkillNames.Count} skill(s):");
@@ -148,15 +187,7 @@ try
 
         messages.Add(new(ChatRole.User, input));
 
-        // Build the tool list dynamically — include the load_skill tool plus any
-        // tools from dynamically connected MCP servers.
-        var tools = new List<AITool> { catalog.LoadSkillTool };
-        foreach (var (_, client) in connectedServers)
-        {
-            var mcpTools = await client.ListToolsAsync();
-            tools.AddRange(mcpTools);
-        }
-        options.Tools = tools;
+        await RefreshToolsAsync();
 
         List<ChatResponseUpdate> updates = [];
         await foreach (var update in chatClient.GetStreamingResponseAsync(messages, options))
