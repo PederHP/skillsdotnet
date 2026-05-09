@@ -219,6 +219,26 @@ public class SkillCatalogTests
     }
 
     [Fact]
+    public async Task UnloadSkillAsync_SwallowsCallbackFailures_AndRebuildsTools()
+    {
+        var catalog = new SkillCatalog();
+        catalog.RegisterTestSkill("alpha", Array.Empty<string>());
+        catalog.RegisterTestSkill("beta", Array.Empty<string>());
+        catalog.MarkLoadedForTesting("alpha");
+        catalog.MarkLoadedForTesting("beta");
+
+        catalog.OnSkillUnloaded = (_, _) => throw new InvalidOperationException("boom");
+
+        var result = await catalog.UnloadSkillAsync("alpha");
+
+        Assert.Equal("alpha", result.SkillName);
+        Assert.Equal(new[] { "beta" }, catalog.LoadedSkillNames);
+        Assert.NotNull(catalog.UnloadSkillTool);
+        Assert.Contains("beta", catalog.UnloadSkillTool!.Description);
+        Assert.DoesNotContain("alpha", catalog.UnloadSkillTool.Description);
+    }
+
+    [Fact]
     public async Task UnloadSkillAsync_OnlyReleasesServersNoLongerNeeded()
     {
         var catalog = new SkillCatalog();

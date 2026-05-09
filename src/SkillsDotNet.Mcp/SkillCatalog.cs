@@ -282,12 +282,20 @@ public sealed class SkillCatalog
             ReleasedServers = releasedServers,
         };
 
-        if (OnSkillUnloaded is not null)
+        try
         {
-            await OnSkillUnloaded(result, cancellationToken);
+            if (OnSkillUnloaded is not null)
+            {
+                await OnSkillUnloaded(result, cancellationToken);
+            }
         }
-
-        RebuildTools();
+        catch (Exception)
+        {
+        }
+        finally
+        {
+            RebuildTools();
+        }
 
         return result;
     }
