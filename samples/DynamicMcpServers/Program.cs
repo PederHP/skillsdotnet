@@ -50,6 +50,21 @@ var catalog = await SkillCatalog.CreateAsync(skillClient);
 // We need to create this so it will be in scope for the callback
 var options = new ChatOptions { };
 
+// Rebuilds options.Tools from the current catalog + connected-servers state.
+// Called at every turn AND inside the dependency callbacks, so newly-connected
+// server tools become visible to the model on the very next round-trip within
+// the same turn (FunctionInvokingChatClient re-reads options.Tools each iteration).
+async Task RefreshToolsAsync()
+{
+    var tools = new List<AITool>(catalog.Tools);
+    foreach (var (_, client) in connectedServers)
+    {
+        var mcpTools = await client.ListToolsAsync();
+        tools.AddRange(mcpTools);
+    }
+    options.Tools = tools;
+}
+
 // This is the key part: when a skill is loaded that declares dependencies,
 // the callback fires and the client host connects to the required MCP servers.
 catalog.OnDependenciesRequired = async (request, cancellationToken) =>
@@ -74,18 +89,8 @@ catalog.OnDependenciesRequired = async (request, cancellationToken) =>
         try
         {
             var client = await factory();
-            connectedServers[serverName] = client;            
+            connectedServers[serverName] = client;
             Console.WriteLine($"[host] Connected to '{serverName}'.");
-
-            // Build the tool list dynamically — include the load_skill tool plus any
-            // tools from dynamically connected MCP servers.
-            var tools = new List<AITool> { catalog.LoadSkillTool };
-            foreach (var (_, dynamicClient) in connectedServers)
-            {
-                var mcpTools = await dynamicClient.ListToolsAsync();
-                tools.AddRange(mcpTools);
-            }
-            options.Tools = tools;
         }
         catch (Exception ex)
         {
@@ -94,8 +99,97 @@ catalog.OnDependenciesRequired = async (request, cancellationToken) =>
         }
     }
 
+    // Make the newly-connected server's tools visible to the model in the next
+    // round-trip of this same turn — without this, the model sees load_skill
+    // succeed but the server's tools are still missing until the next user turn.
+    await RefreshToolsAsync();
+
     return true;
 };
+
+// Skills the model has unloaded *during* the current turn. We can't scrub the
+// chat history mid-stream — FunctionInvokingChatClient is iterating it — so we
+// queue the names here and process them after GetStreamingResponseAsync returns.
+var pendingScrubs = new List<string>();
+
+// Fires whenever a skill is unloaded (via the unload_skill tool or a direct call).
+// The catalog computes which MCP servers are no longer needed by *any* still-loaded
+// skill, so we can disconnect those without ref-counting. We also queue the skill
+// name for message-history scrubbing once the streaming turn finishes.
+catalog.OnSkillUnloaded = async (result, cancellationToken) =>
+{
+    Console.WriteLine($"\n[host] Skill '{result.SkillName}' unloaded.");
+
+    foreach (var serverName in result.ReleasedServers)
+    {
+        if (!connectedServers.TryRemove(serverName, out var client))
+        {
+            continue;
+        }
+
+        Console.WriteLine($"[host] Disconnecting from '{serverName}'...");
+        try
+        {
+            await client.DisposeAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[host] Error disconnecting from '{serverName}': {ex.Message}");
+        }
+    }
+
+    // Drop the disconnected servers' tools from options.Tools immediately, so the
+    // model can't keep calling them after the unload in the same turn.
+    await RefreshToolsAsync();
+
+    pendingScrubs.Add(result.SkillName);
+};
+
+// Walks the chat history and removes the load_skill call/result pair for the named
+// skill — that's the SKILL.md content block plus the model's invocation that
+// produced it. Run this AFTER the streaming turn completes so we don't mutate the
+// list out from under FunctionInvokingChatClient.
+static void ScrubLoadCallsForSkill(IList<ChatMessage> messages, string skillName)
+{
+    // 1. Find every load_skill(skillName) call and collect its CallId.
+    var idsToScrub = new HashSet<string>(StringComparer.Ordinal);
+    foreach (var msg in messages)
+    {
+        foreach (var content in msg.Contents)
+        {
+            if (content is FunctionCallContent fcc
+                && fcc.Name == "load_skill"
+                && fcc.CallId is not null
+                && fcc.Arguments is not null
+                && fcc.Arguments.TryGetValue("skillName", out var v)
+                && v?.ToString() == skillName)
+            {
+                idsToScrub.Add(fcc.CallId);
+            }
+        }
+    }
+
+    if (idsToScrub.Count == 0) return;
+
+    // 2. Filter contents in place; drop messages that become empty.
+    for (int i = messages.Count - 1; i >= 0; i--)
+    {
+        var msg = messages[i];
+        var filtered = msg.Contents.Where(c =>
+            !(c is FunctionCallContent fcc && fcc.CallId is not null && idsToScrub.Contains(fcc.CallId))
+            && !(c is FunctionResultContent frc && idsToScrub.Contains(frc.CallId))
+        ).ToList();
+
+        if (filtered.Count == 0)
+        {
+            messages.RemoveAt(i);
+        }
+        else if (filtered.Count != msg.Contents.Count)
+        {
+            msg.Contents = filtered;
+        }
+    }
+}
 
 Console.WriteLine($"Discovered {catalog.SkillNames.Count} skill(s):");
 foreach (var name in catalog.SkillNames)
@@ -148,15 +242,7 @@ try
 
         messages.Add(new(ChatRole.User, input));
 
-        // Build the tool list dynamically — include the load_skill tool plus any
-        // tools from dynamically connected MCP servers.
-        var tools = new List<AITool> { catalog.LoadSkillTool };
-        foreach (var (_, client) in connectedServers)
-        {
-            var mcpTools = await client.ListToolsAsync();
-            tools.AddRange(mcpTools);
-        }
-        options.Tools = tools;
+        await RefreshToolsAsync();
 
         List<ChatResponseUpdate> updates = [];
         await foreach (var update in chatClient.GetStreamingResponseAsync(messages, options))
@@ -168,6 +254,19 @@ try
         Console.WriteLine();
 
         messages.AddMessages(updates);
+
+        // Now that the streaming iteration is done, it's safe to mutate `messages`.
+        // Drop the load_skill call/result pairs for any skills the model unloaded
+        // during this turn — that frees the SKILL.md context for good.
+        if (pendingScrubs.Count > 0)
+        {
+            foreach (var skillName in pendingScrubs)
+            {
+                ScrubLoadCallsForSkill(messages, skillName);
+                Console.WriteLine($"[host] Scrubbed load_skill call/result for '{skillName}' from message history.");
+            }
+            pendingScrubs.Clear();
+        }
     }
 }
 finally
