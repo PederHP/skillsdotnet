@@ -184,21 +184,33 @@ See the [DynamicMcpServers sample](samples/DynamicMcpServers/) for a complete ex
 
 ### Unloading skills
 
-Progressive disclosure shouldn't become progressive accumulation. Once at least one skill is loaded, `SkillCatalog.UnloadSkillTool` becomes available alongside `load_skill` — the model is told about it via a short postscript appended to each `load_skill` response, and can call it to free a skill's context when finished:
+Progressive disclosure shouldn't become progressive accumulation. Once at least one skill is loaded, `SkillCatalog.UnloadSkillTool` becomes available alongside `load_skill` — the model is told about it via a short postscript appended to each `load_skill` response, and can call it to free a skill's context when finished. The `unload_skill` AIFunction and its accompanying guidance only appear while at least one skill is currently loaded.
+
+The `OnSkillUnloaded` callback fires every time a skill is unloaded. The host wires it to do two things:
+
+1. **Disconnect any released MCP servers.** The catalog passes only the servers no longer needed by any other still-loaded skill, so there's no ref-counting to do.
+2. **Scrub the prior `load_skill` call/result pair from chat history** — that's where the SKILL.md content actually lives. The library doesn't touch your message list; the host is in charge.
+
+Mutating the chat history while `FunctionInvokingChatClient` is iterating is unsafe, so queue scrub work during the callback and process it after `GetStreamingResponseAsync` returns:
 
 ```csharp
-catalog.OnDependenciesReleased = async (release, cancellationToken) =>
+var pendingScrubs = new List<string>();
+
+catalog.OnSkillUnloaded = async (result, ct) =>
 {
-    // Only fires for servers that are no longer required by any *other* still-loaded
-    // skill — the catalog handles ref-counting, so it's safe to disconnect blindly.
-    foreach (var serverName in release.ServerNames)
-    {
-        await DisconnectAsync(serverName, cancellationToken);
-    }
+    foreach (var serverName in result.ReleasedServers)
+        await DisconnectAsync(serverName, ct);
+
+    pendingScrubs.Add(result.SkillName);
 };
+
+// ... after each streaming turn:
+foreach (var skillName in pendingScrubs)
+    ScrubLoadCallsForSkill(messages, skillName);
+pendingScrubs.Clear();
 ```
 
-`UnloadSkillAsync` returns a `SkillUnloadResult` with the captured tool-call IDs from the original `load_skill` invocations (when the host uses `Microsoft.Extensions.AI.FunctionInvokingChatClient`), so hosts that want to scrub the chat history can drop the matching tool results. The `unload_skill` AIFunction and its accompanying guidance are only surfaced when at least one skill is currently loaded.
+The scrub itself is a simple predicate over the messages list — match `FunctionCallContent` whose `Name == "load_skill"` and `Arguments["skillName"]` equals the unloaded skill, then drop those calls and the matching `FunctionResultContent`. See [DynamicMcpServers/Program.cs](samples/DynamicMcpServers/Program.cs) for the complete implementation.
 
 ## URI Convention
 

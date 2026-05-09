@@ -1,4 +1,3 @@
-using System.Reflection;
 using Microsoft.Extensions.AI;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
@@ -16,11 +15,14 @@ namespace SkillsDotNet.Mcp;
 /// so it doesn't clutter context the rest of the time. The accompanying guidance
 /// for the model is appended to <c>load_skill</c>'s response — it appears at the
 /// moment loading happens and disappears with the tool result on unload.
+/// Unload is observable via <see cref="OnSkillUnloaded"/>: hosts wire that
+/// callback to disconnect any released MCP servers and to scrub the matching
+/// <c>load_skill</c> call/result pairs from their chat history.
 /// </remarks>
 public sealed class SkillCatalog
 {
     private readonly Dictionary<string, CachedSkill> _cache = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, List<string>> _loadedSkills = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _loadedSkills = new(StringComparer.Ordinal);
     private readonly Func<IReadOnlyDictionary<string, object>, string>? _contextFormatter;
 
     /// <summary>
@@ -88,9 +90,9 @@ public sealed class SkillCatalog
 
     /// <summary>
     /// Removes all skills that were discovered from the given <paramref name="client"/>.
-    /// Any of those skills that were currently loaded are also dropped from the loaded set
-    /// (without firing <see cref="OnDependenciesReleased"/> — releasing servers belonging
-    /// to a torn-down client is the host's responsibility).
+    /// Any of those skills that were currently loaded are silently dropped from the loaded
+    /// set without firing <see cref="OnSkillUnloaded"/> — tearing down a client is
+    /// the host's own action, not a model-driven unload.
     /// </summary>
     public void RemoveClient(McpClient client)
     {
@@ -118,7 +120,7 @@ public sealed class SkillCatalog
     /// <summary>
     /// Names of skills that have been loaded via <see cref="LoadSkillAsync"/> and not yet unloaded.
     /// </summary>
-    public IReadOnlyList<string> LoadedSkillNames => _loadedSkills.Keys.ToList();
+    public IReadOnlyList<string> LoadedSkillNames => _loadedSkills.ToList();
 
     /// <summary>
     /// Returns the pre-computed <see cref="TextContent"/> context block for the given skill.
@@ -148,12 +150,23 @@ public sealed class SkillCatalog
     public Func<SkillDependencyRequest, CancellationToken, Task<bool>>? OnDependenciesRequired { get; set; }
 
     /// <summary>
-    /// Optional callback invoked when a skill is unloaded and one or more of its declared
-    /// MCP server dependencies are no longer required by any other currently-loaded skill.
-    /// The callback receives only the servers that are safe to disconnect.
-    /// Best-effort: failures to disconnect do not propagate.
+    /// Optional callback invoked whenever a skill is unloaded via <see cref="UnloadSkillAsync"/>
+    /// (including from the <c>unload_skill</c> AIFunction). The callback receives a
+    /// <see cref="SkillUnloadResult"/> with the skill name and the list of MCP servers that
+    /// are no longer required by any other currently-loaded skill (possibly empty).
     /// </summary>
-    public Func<SkillDependencyRelease, CancellationToken, Task>? OnDependenciesReleased { get; set; }
+    /// <remarks>
+    /// Hosts typically wire this to do two things:
+    /// <list type="bullet">
+    ///   <item>Disconnect each name in <see cref="SkillUnloadResult.ReleasedServers"/>.</item>
+    ///   <item>Scrub the prior <c>load_skill</c> call/result pair for this skill from the chat
+    ///         history so the SKILL.md content stops consuming context. Defer this until after
+    ///         the streaming turn completes — mutating the messages list while the function-
+    ///         invoking chat client is iterating it is unsafe.</item>
+    /// </list>
+    /// Best-effort: failures inside the callback do not propagate.
+    /// </remarks>
+    public Func<SkillUnloadResult, CancellationToken, Task>? OnSkillUnloaded { get; set; }
 
     /// <summary>
     /// An <see cref="AIFunction"/> that loads a skill's full SKILL.md content by name.
@@ -164,7 +177,8 @@ public sealed class SkillCatalog
 
     /// <summary>
     /// An <see cref="AIFunction"/> that unloads a previously loaded skill, freeing context
-    /// and triggering <see cref="OnDependenciesReleased"/> for any servers no longer needed.
+    /// and triggering <see cref="OnSkillUnloaded"/> so the host can disconnect any released
+    /// MCP servers and scrub the prior <c>load_skill</c> call/result from chat history.
     /// <c>null</c> when no skills are currently loaded — in that state there is nothing to unload
     /// and surfacing the tool would just clutter the model's context.
     /// </summary>
@@ -220,31 +234,22 @@ public sealed class SkillCatalog
                 $"No text content returned for skill '{skillName}'.");
         }
 
-        if (!_loadedSkills.TryGetValue(skillName, out var ids))
-        {
-            ids = new List<string>();
-            _loadedSkills[skillName] = ids;
-        }
-
-        var callId = TryGetCurrentToolCallId();
-        if (callId is not null)
-        {
-            ids.Add(callId);
-        }
-
+        _loadedSkills.Add(skillName);
         RebuildTools();
 
         return text.Text + BuildUnloadPostscript(skillName);
     }
 
     /// <summary>
-    /// Marks a previously loaded skill as unloaded. Computes the set of MCP servers that are
-    /// no longer required (i.e., this skill's deps minus deps still needed by other loaded
-    /// skills) and invokes <see cref="OnDependenciesReleased"/> for that set if non-empty.
+    /// Marks a previously loaded skill as unloaded and fires <see cref="OnSkillUnloaded"/>
+    /// so the host can disconnect any released MCP servers and scrub the prior load
+    /// call/result from chat history. The set of "released" servers is this skill's
+    /// dependencies minus those still required by any other currently-loaded skill, so
+    /// the host can act on it without ref-counting.
     /// </summary>
     /// <returns>
-    /// A <see cref="SkillUnloadResult"/> with the captured tool-call IDs (so the host can drop
-    /// the corresponding tool results from chat history) and the released server names.
+    /// A <see cref="SkillUnloadResult"/> with the skill name and released server names.
+    /// Same value passed to the callback.
     /// </returns>
     /// <exception cref="KeyNotFoundException">The skill is not currently loaded.</exception>
     public async Task<SkillUnloadResult> UnloadSkillAsync(
@@ -252,44 +257,39 @@ public sealed class SkillCatalog
     {
         ArgumentNullException.ThrowIfNull(skillName);
 
-        if (!_loadedSkills.Remove(skillName, out var callIds))
+        if (!_loadedSkills.Remove(skillName))
         {
             throw new KeyNotFoundException(
                 $"Skill '{skillName}' is not currently loaded.");
         }
 
-        IReadOnlyList<string> safeToDisconnect = Array.Empty<string>();
+        IReadOnlyList<string> releasedServers = Array.Empty<string>();
         if (_cache.TryGetValue(skillName, out var cached) && cached.Dependencies.Count > 0)
         {
-            var stillNeeded = _loadedSkills.Keys
+            var stillNeeded = _loadedSkills
                 .Where(_cache.ContainsKey)
                 .SelectMany(k => _cache[k].Dependencies)
                 .ToHashSet(StringComparer.Ordinal);
 
-            safeToDisconnect = cached.Dependencies
+            releasedServers = cached.Dependencies
                 .Where(d => !stillNeeded.Contains(d))
                 .ToList();
         }
 
-        if (safeToDisconnect.Count > 0 && OnDependenciesReleased is not null)
+        var result = new SkillUnloadResult
         {
-            var release = new SkillDependencyRelease
-            {
-                SkillName = skillName,
-                ServerNames = safeToDisconnect,
-            };
+            SkillName = skillName,
+            ReleasedServers = releasedServers,
+        };
 
-            await OnDependenciesReleased(release, cancellationToken);
+        if (OnSkillUnloaded is not null)
+        {
+            await OnSkillUnloaded(result, cancellationToken);
         }
 
         RebuildTools();
 
-        return new SkillUnloadResult
-        {
-            SkillName = skillName,
-            ToolCallIds = callIds,
-            ReleasedServers = safeToDisconnect,
-        };
+        return result;
     }
 
     private void RebuildTools()
@@ -314,11 +314,11 @@ public sealed class SkillCatalog
         RebuildTools();
     }
 
-    // Test seam: mark a registered skill as loaded with the given tool-call IDs,
-    // bypassing the resource read. Pairs with RegisterTestSkill.
-    internal void MarkLoadedForTesting(string name, params string[] callIds)
+    // Test seam: mark a registered skill as loaded, bypassing the resource read.
+    // Pairs with RegisterTestSkill.
+    internal void MarkLoadedForTesting(string name)
     {
-        _loadedSkills[name] = callIds.ToList();
+        _loadedSkills.Add(name);
         RebuildTools();
     }
 
@@ -337,14 +337,12 @@ public sealed class SkillCatalog
 
     private AIFunction BuildUnloadSkillTool()
     {
-        var loaded = string.Join(", ", _loadedSkills.Keys);
+        var loaded = string.Join(", ", _loadedSkills);
         return AIFunctionFactory.Create(
             async (string skillName, CancellationToken cancellationToken) =>
             {
                 var result = await UnloadSkillAsync(skillName, cancellationToken);
-                return result.ReleasedServers.Count > 0
-                    ? $"Unloaded '{result.SkillName}'. Released MCP servers: {string.Join(", ", result.ReleasedServers)}."
-                    : $"Unloaded '{result.SkillName}'. No MCP servers needed releasing.";
+                return $"Unloaded '{result.SkillName}'.";
             },
             new AIFunctionFactoryOptions
             {
@@ -358,37 +356,6 @@ public sealed class SkillCatalog
     private static string BuildUnloadPostscript(string skillName) =>
         $"\n\n---\nWhen you no longer need this skill, call `unload_skill(\"{skillName}\")` " +
         "to free its context and release any MCP servers that were connected for it.";
-
-    /// <summary>
-    /// Reads the current tool-call ID from <c>FunctionInvokingChatClient.CurrentContext</c> via
-    /// reflection. Returns <c>null</c> if the host isn't using <c>FunctionInvokingChatClient</c>
-    /// (e.g., direct SDK calls or a custom invoker), in which case the catalog still tracks the
-    /// skill as loaded by name — only the per-call ID is unavailable.
-    /// </summary>
-    private static string? TryGetCurrentToolCallId()
-    {
-        try
-        {
-            var clientType = Type.GetType(
-                "Microsoft.Extensions.AI.FunctionInvokingChatClient, Microsoft.Extensions.AI",
-                throwOnError: false);
-            if (clientType is null) return null;
-
-            var ctx = clientType
-                .GetProperty("CurrentContext", BindingFlags.Public | BindingFlags.Static)
-                ?.GetValue(null);
-            if (ctx is null) return null;
-
-            var callContent = ctx.GetType().GetProperty("CallContent")?.GetValue(ctx);
-            if (callContent is null) return null;
-
-            return callContent.GetType().GetProperty("CallId")?.GetValue(callContent) as string;
-        }
-        catch
-        {
-            return null;
-        }
-    }
 
     private sealed class CachedSkill
     {

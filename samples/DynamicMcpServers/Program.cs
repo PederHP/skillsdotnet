@@ -107,13 +107,20 @@ catalog.OnDependenciesRequired = async (request, cancellationToken) =>
     return true;
 };
 
-// Symmetric to OnDependenciesRequired: the catalog computes which servers are no
-// longer needed by *any* still-loaded skill, and we only need to tear those down.
-catalog.OnDependenciesReleased = async (release, cancellationToken) =>
-{
-    Console.WriteLine($"\n[host] Skill '{release.SkillName}' unloaded; releasing MCP servers: {string.Join(", ", release.ServerNames)}");
+// Skills the model has unloaded *during* the current turn. We can't scrub the
+// chat history mid-stream — FunctionInvokingChatClient is iterating it — so we
+// queue the names here and process them after GetStreamingResponseAsync returns.
+var pendingScrubs = new List<string>();
 
-    foreach (var serverName in release.ServerNames)
+// Fires whenever a skill is unloaded (via the unload_skill tool or a direct call).
+// The catalog computes which MCP servers are no longer needed by *any* still-loaded
+// skill, so we can disconnect those without ref-counting. We also queue the skill
+// name for message-history scrubbing once the streaming turn finishes.
+catalog.OnSkillUnloaded = async (result, cancellationToken) =>
+{
+    Console.WriteLine($"\n[host] Skill '{result.SkillName}' unloaded.");
+
+    foreach (var serverName in result.ReleasedServers)
     {
         if (!connectedServers.TryRemove(serverName, out var client))
         {
@@ -131,10 +138,58 @@ catalog.OnDependenciesReleased = async (release, cancellationToken) =>
         }
     }
 
-    // Drop the disconnected servers' tools from options.Tools immediately, so
-    // the model can't keep calling them after the unload in the same turn.
+    // Drop the disconnected servers' tools from options.Tools immediately, so the
+    // model can't keep calling them after the unload in the same turn.
     await RefreshToolsAsync();
+
+    pendingScrubs.Add(result.SkillName);
 };
+
+// Walks the chat history and removes the load_skill call/result pair for the named
+// skill — that's the SKILL.md content block plus the model's invocation that
+// produced it. Run this AFTER the streaming turn completes so we don't mutate the
+// list out from under FunctionInvokingChatClient.
+static void ScrubLoadCallsForSkill(IList<ChatMessage> messages, string skillName)
+{
+    // 1. Find every load_skill(skillName) call and collect its CallId.
+    var idsToScrub = new HashSet<string>(StringComparer.Ordinal);
+    foreach (var msg in messages)
+    {
+        foreach (var content in msg.Contents)
+        {
+            if (content is FunctionCallContent fcc
+                && fcc.Name == "load_skill"
+                && fcc.CallId is not null
+                && fcc.Arguments is not null
+                && fcc.Arguments.TryGetValue("skillName", out var v)
+                && v?.ToString() == skillName)
+            {
+                idsToScrub.Add(fcc.CallId);
+            }
+        }
+    }
+
+    if (idsToScrub.Count == 0) return;
+
+    // 2. Filter contents in place; drop messages that become empty.
+    for (int i = messages.Count - 1; i >= 0; i--)
+    {
+        var msg = messages[i];
+        var filtered = msg.Contents.Where(c =>
+            !(c is FunctionCallContent fcc && fcc.CallId is not null && idsToScrub.Contains(fcc.CallId))
+            && !(c is FunctionResultContent frc && idsToScrub.Contains(frc.CallId))
+        ).ToList();
+
+        if (filtered.Count == 0)
+        {
+            messages.RemoveAt(i);
+        }
+        else if (filtered.Count != msg.Contents.Count)
+        {
+            msg.Contents = filtered;
+        }
+    }
+}
 
 Console.WriteLine($"Discovered {catalog.SkillNames.Count} skill(s):");
 foreach (var name in catalog.SkillNames)
@@ -199,6 +254,19 @@ try
         Console.WriteLine();
 
         messages.AddMessages(updates);
+
+        // Now that the streaming iteration is done, it's safe to mutate `messages`.
+        // Drop the load_skill call/result pairs for any skills the model unloaded
+        // during this turn — that frees the SKILL.md context for good.
+        if (pendingScrubs.Count > 0)
+        {
+            foreach (var skillName in pendingScrubs)
+            {
+                ScrubLoadCallsForSkill(messages, skillName);
+                Console.WriteLine($"[host] Scrubbed load_skill call/result for '{skillName}' from message history.");
+            }
+            pendingScrubs.Clear();
+        }
     }
 }
 finally

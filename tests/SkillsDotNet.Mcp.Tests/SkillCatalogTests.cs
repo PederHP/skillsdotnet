@@ -77,21 +77,21 @@ public class SkillCatalogTests
     }
 
     [Fact]
-    public void OnDependenciesReleased_DefaultsToNull()
+    public void OnSkillUnloaded_DefaultsToNull()
     {
         var catalog = new SkillCatalog();
 
-        Assert.Null(catalog.OnDependenciesReleased);
+        Assert.Null(catalog.OnSkillUnloaded);
     }
 
     [Fact]
-    public void OnDependenciesReleased_CanBeSet()
+    public void OnSkillUnloaded_CanBeSet()
     {
         var catalog = new SkillCatalog();
 
-        catalog.OnDependenciesReleased = (release, ct) => Task.CompletedTask;
+        catalog.OnSkillUnloaded = (result, ct) => Task.CompletedTask;
 
-        Assert.NotNull(catalog.OnDependenciesReleased);
+        Assert.NotNull(catalog.OnSkillUnloaded);
     }
 
     [Fact]
@@ -167,19 +167,6 @@ public class SkillCatalogTests
     }
 
     [Fact]
-    public async Task UnloadSkillAsync_ReturnsCapturedToolCallIds()
-    {
-        var catalog = new SkillCatalog();
-        catalog.RegisterTestSkill("alpha", Array.Empty<string>());
-        catalog.MarkLoadedForTesting("alpha", "call_123", "call_456");
-
-        var result = await catalog.UnloadSkillAsync("alpha");
-
-        Assert.Equal("alpha", result.SkillName);
-        Assert.Equal(new[] { "call_123", "call_456" }, result.ToolCallIds);
-    }
-
-    [Fact]
     public async Task UnloadSkillAsync_RemovesUnloadTool_WhenLastSkillUnloaded()
     {
         var catalog = new SkillCatalog();
@@ -210,27 +197,29 @@ public class SkillCatalogTests
     }
 
     [Fact]
-    public async Task UnloadSkillAsync_NoDeps_DoesNotInvokeReleaseCallback()
+    public async Task UnloadSkillAsync_FiresCallback_WithEmptyReleasedServers_WhenSkillHasNoDeps()
     {
         var catalog = new SkillCatalog();
         catalog.RegisterTestSkill("alpha", Array.Empty<string>());
         catalog.MarkLoadedForTesting("alpha");
 
-        var fired = false;
-        catalog.OnDependenciesReleased = (release, ct) =>
+        SkillUnloadResult? captured = null;
+        catalog.OnSkillUnloaded = (result, ct) =>
         {
-            fired = true;
+            captured = result;
             return Task.CompletedTask;
         };
 
         var result = await catalog.UnloadSkillAsync("alpha");
 
-        Assert.False(fired);
+        Assert.NotNull(captured);
+        Assert.Equal("alpha", captured!.SkillName);
+        Assert.Empty(captured.ReleasedServers);
         Assert.Empty(result.ReleasedServers);
     }
 
     [Fact]
-    public async Task UnloadSkillAsync_FiresReleaseCallback_OnlyForServersNoLongerNeeded()
+    public async Task UnloadSkillAsync_OnlyReleasesServersNoLongerNeeded()
     {
         var catalog = new SkillCatalog();
         // alpha needs github + slack; beta needs github only.
@@ -239,10 +228,10 @@ public class SkillCatalogTests
         catalog.MarkLoadedForTesting("alpha");
         catalog.MarkLoadedForTesting("beta");
 
-        SkillDependencyRelease? captured = null;
-        catalog.OnDependenciesReleased = (release, ct) =>
+        SkillUnloadResult? captured = null;
+        catalog.OnSkillUnloaded = (result, ct) =>
         {
-            captured = release;
+            captured = result;
             return Task.CompletedTask;
         };
 
@@ -251,12 +240,12 @@ public class SkillCatalogTests
         Assert.NotNull(captured);
         Assert.Equal("alpha", captured!.SkillName);
         // github is still needed by beta; only slack should be released.
-        Assert.Equal(new[] { "slack" }, captured.ServerNames);
+        Assert.Equal(new[] { "slack" }, captured.ReleasedServers);
         Assert.Equal(new[] { "slack" }, result.ReleasedServers);
     }
 
     [Fact]
-    public async Task UnloadSkillAsync_AllDepsStillNeeded_DoesNotInvokeReleaseCallback()
+    public async Task UnloadSkillAsync_FiresCallback_WithEmptyReleasedServers_WhenAllDepsStillNeeded()
     {
         var catalog = new SkillCatalog();
         catalog.RegisterTestSkill("alpha", new[] { "github" });
@@ -264,37 +253,38 @@ public class SkillCatalogTests
         catalog.MarkLoadedForTesting("alpha");
         catalog.MarkLoadedForTesting("beta");
 
-        var fired = false;
-        catalog.OnDependenciesReleased = (release, ct) =>
+        SkillUnloadResult? captured = null;
+        catalog.OnSkillUnloaded = (result, ct) =>
         {
-            fired = true;
+            captured = result;
             return Task.CompletedTask;
         };
 
         var result = await catalog.UnloadSkillAsync("alpha");
 
-        Assert.False(fired);
+        Assert.NotNull(captured);
+        Assert.Empty(captured!.ReleasedServers);
         Assert.Empty(result.ReleasedServers);
     }
 
     [Fact]
-    public async Task UnloadSkillAsync_FiresReleaseCallback_ForAllDeps_WhenLastLoaded()
+    public async Task UnloadSkillAsync_ReleasesAllDeps_WhenLastLoaded()
     {
         var catalog = new SkillCatalog();
         catalog.RegisterTestSkill("alpha", new[] { "github", "slack" });
         catalog.MarkLoadedForTesting("alpha");
 
-        SkillDependencyRelease? captured = null;
-        catalog.OnDependenciesReleased = (release, ct) =>
+        SkillUnloadResult? captured = null;
+        catalog.OnSkillUnloaded = (result, ct) =>
         {
-            captured = release;
+            captured = result;
             return Task.CompletedTask;
         };
 
         await catalog.UnloadSkillAsync("alpha");
 
         Assert.NotNull(captured);
-        Assert.Equal(new[] { "github", "slack" }, captured!.ServerNames);
+        Assert.Equal(new[] { "github", "slack" }, captured!.ReleasedServers);
     }
 
     [Fact]
